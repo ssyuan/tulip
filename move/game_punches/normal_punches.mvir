@@ -1,0 +1,52 @@
+//! new-transaction
+import 0x0.GamePunches;
+import 0x0.LibraAccount;
+import 0x0.LibraCoin;
+import 0x0.U64Util;
+
+main(playerB: address) {
+    let coin: LibraCoin.T;
+    let recieve_coin: LibraCoin.T;
+    let punches_bytes: bytearray;
+    let punches_playerb: u64;
+    let playerA_punches: u64;
+    let playerB_punches: u64;
+    let playerA_password: u64;
+    let playerB_password: u64;
+    let sender: address;
+    let playerA_key_bytes: bytearray;
+    let account_exists: bool;
+    let balanceA: u64;
+    let balanceB: u64;
+
+    account_exists = LibraAccount.exists(copy(playerB));
+    if (!move(account_exists)) {
+        // playerB is not exist
+        return;
+    }
+
+    playerA_key_bytes = U64Util.u64_to_bytes(10000);
+    playerA_punches = 10;
+    playerA_password = 15;
+    sender = get_txn_sender();
+    // playerA to player challenge bet 10coin, punches 5, password 15
+    coin = LibraAccount.withdraw_from_sender(10);
+    punches_bytes = GamePunches.hash_punches(copy(playerA_key_bytes), copy(playerA_punches));
+    GamePunches.playerA_issue_chanllenge(copy(playerB), move(coin), copy(punches_bytes), copy(playerA_password));
+    //playerB
+    recieve_coin = LibraAccount.withdraw_from_receiver(10);
+    punches_playerb = 10;
+    playerB_password = 20;
+    GamePunches.playerB_accept_chanllenge(copy(sender), move(recieve_coin), copy(punches_playerb), copy(playerB_password));
+    // playerA expose  layerA_expose_challenge(pB: address, key: bytearray, pA_punches: u64, pA_password: u64)
+    GamePunches.playerA_expose_challenge(copy(playerB), copy(key_bytes), copy(playerA_punches), copy(playerA_password));
+    //player clearing
+    GamePunches.clearing(copy(sender), copy(playerB));
+    //check blance
+    balanceA = LibraAccount.balance(copy(sender));
+    balanceB = LibraAccount.balance(copy(playerB));
+    //playerB win
+    assert(copy(balanceA) == 0, 99);
+    assert(copy(balanceB) == 20, 99);
+    return;
+}
