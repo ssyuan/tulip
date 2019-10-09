@@ -1,0 +1,408 @@
+module GamePunches {
+    import 0x0.LibraCoin;
+    import 0x0.LibraAccount;
+    import 0x0.Hash;
+    import 0x0.Block;
+    import 0x0.U64Util;
+    import 0x0.BytearrayUtil;
+
+    // round challenge
+    resource Challenge {
+        // address of B player
+        playerB: address,
+        // the value of bet
+        bet: LibraCoin.T,
+        //punches: 0 or 5
+        hmac_punches: bytearray,
+        //punches password: 0-20
+        password: u64,
+        // timestamp of challenge
+        timestamp: u64
+    }
+
+   // round Response
+    resource Response {
+        // address of A player
+        playerA: address,
+        // responding to which challenge
+        challenge: Self.Challenge,
+        // the value of the bet
+        bet: LibraCoin.T,
+        // punches 0 or 5
+        punches: u64,
+        // punches password: 0-20
+        password: u64,
+   }
+    // game result
+    resource Result {
+        playerA: address,
+        playerA_punches: u64,
+        playerA_password: u64,
+        playerA_bet: LibraCoin.T,
+
+        playerB: address,
+        playerB_punches: u64,
+        playerB_password: u64,
+        playerB_bet: LibraCoin.T,
+    }
+
+    public hash_punches(key: bytearray, punches: u64): bytearray {
+        let hashed: bytearray;
+        let concat: bytearray;
+        let punches_bytes: bytearray;
+
+        punches_bytes = U64Util.u64_to_bytes(move(punches));
+        concat = BytearrayUtil.bytearray_concat(copy(key), move(punches_bytes));
+        hashed = Hash.sha3_256(copy(concat));
+        return move(hashed);
+    }
+
+    //1. issue chanllenge
+    public playerA_issue_chanllenge(pB: address, coin: LibraCoin.T, salted_punches: bytearray,
+                                    password: u64)  {
+        let time: u64;
+        let challenge: Self.Challenge;
+
+        time = Block.get_current_height();
+        challenge = Challenge {
+            playerB: copy(pB),
+            bet: move(coin),
+            hmac_punches: copy(salted_punches),
+            password: copy(password),
+            timestamp: copy(time),
+        };
+
+        move_to_sender<Challenge>(move(challenge));
+        return;
+    }
+
+    //2. response chanllenge
+    public playerB_accept_chanllenge(pA: address, coin: LibraCoin.T,
+                                    punches: u64, password: u64) acquires Challenge {
+        let response: Self.Response;
+        let challenge: Self.Challenge;
+        let challenge_ref: &mut Self.Challenge;
+        let challenged_addr: address;
+        let sender: address;
+
+        let pB_addr: address;
+        let pA_coin: LibraCoin.T;
+        let pA_punches_hmac: bytearray;
+        let challenge_time: u64;
+        let pA_password: u64;
+
+        challenge = move_from<Challenge>(copy(pA));
+
+        Challenge {
+            playerB: pB_addr,
+            bet: pA_coin,
+            hmac_punches: pA_punches_hmac,
+            password: pA_password,
+            timestamp: challenge_time
+        } = move(challenge);
+
+        sender = get_txn_sender();
+        assert(copy(sender) == copy(pB_addr), 90);
+
+        response = Response {
+                playerA: copy(pA),
+                challenge: Challenge {
+                    playerB: move(pB_addr),
+                    bet: move(pA_coin),
+                    hmac_punches: move(pA_punches_hmac),
+                    password: move(pA_password),
+                    timestamp: move(challenge_time)
+            },
+            bet: move(coin),
+            punches: copy(punches),
+            password: copy(password)
+        };
+
+        move_to_sender<Response>(move(response));
+        return;
+    }
+
+    // success judgment
+    public wins(punchesA: u64, passwordA: u64, punchesB: u64, passwordB: u64): bool {
+        assert(((0 <= copy(punchesA)) && (copy(punchesA) <= 10)), 91);
+        assert(((0 <= copy(passwordA)) && (copy(passwordA) <= 20)), 92);
+        assert(((0 <= copy(punchesB)) && (copy(punchesB) <= 10)), 93);
+        assert(((0 <= copy(passwordB)) && (copy(passwordB) <= 20)), 94);
+
+        if ((copy(punchesA) + copy(passwordA)) > (copy(punchesB) + copy(passwordB))) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    //3. expose chanllenge result
+    public playerA_expose_challenge(pB: address, key: bytearray, pA_punches: u64, pA_password: u64)
+                                    acquires  Response {
+        let response: Self.Response;
+        let challenge: Self.Challenge;
+        let result: Self.Result;
+        let sender: address;
+        let current_time: u64;
+        let pA_addr: address;
+        let pB_addr: address;
+        let pA_coin: LibraCoin.T;
+        let pB_coin: LibraCoin.T;
+        let pB_password: u64;
+        let pool: LibraCoin.T;
+        let pA_punches_hmac: bytearray;
+        let pA_punches_hash: bytearray;
+        let pA_punches_bytes: bytearray;
+        let pB_punches: u64;
+        let challenge_time: u64;
+
+        sender = get_txn_sender();
+        current_time = Block.get_current_height();
+
+        response = move_from<Response>(copy(pB));
+        Response {
+            playerA: pA_addr,
+            challenge: challenge,
+            bet: pB_coin,
+            punches: pB_punches,
+            password: pB_password
+        } = move(response);
+
+        Challenge {
+            playerB: pB_addr,
+            bet: pA_coin,
+            hmac_punches: pA_punches_hmac,
+            password: pA_password,
+            timestamp: challenge_time
+        } = move(challenge);
+
+        assert(copy(sender) == copy(pA_addr), 95);
+        assert(copy(pB) == copy(pB_addr), 96);
+
+        pA_punches_hash = Self.hash_punches(copy(key), copy(pA_punches));
+        assert(copy(pA_punches_hash) == copy(pA_punches_hmac), 97);
+
+        result = Result {
+            playerA: copy(pA_addr),
+            playerA_punches: copy(pA_punches),
+            playerA_password: copy(pA_password),
+            playerA_bet: move(pA_coin),
+
+            playerB: copy(pB_addr),
+            playerB_punches: copy(pB_punches),
+            playerB_password: copy(pB_password),
+            playerB_bet: move(pB_coin)
+        };
+
+        move_to_sender<Result>(move(result));
+        return;
+    }
+    //3.1 playerA time out
+    //TODO
+
+    //4. clearing
+    public clearing(pA: address, pB: address) acquires Result {
+        let playerA: address;
+        let playerA_punches: u64;
+        let playerA_password: u64;
+        let playerA_bet: LibraCoin.T;
+        let playerB: address;
+        let playerB_punches: u64;
+        let playerB_password: u64;
+        let playerB_bet: LibraCoin.T;
+
+        let winner_pA: bool;
+        let winner_pB: bool;
+
+        let result: Self.Result;
+
+        result = move_from<Result>(copy(pA));
+        Result {
+            playerA: playerA,
+            playerA_punches: playerA_punches,
+            playerA_password: playerA_password,
+            playerA_bet: playerA_bet,
+
+            playerB: playerB,
+            playerB_punches: playerB_punches,
+            playerB_password: playerB_password,
+            playerB_bet: playerB_bet
+        } = move(result);
+
+        winner_pA = Self.wins(copy(playerA_punches), copy(playerA_password),
+                              copy(playerB_punches), copy(playerB_password));
+        winner_pB = Self.wins(copy(playerB_punches), copy(playerB_password),
+                              copy(playerA_punches), copy(playerA_password));
+
+        if (copy(winner_pA)) {
+            LibraAccount.deposit(copy(pA), move(playerA_bet));
+            LibraAccount.deposit(copy(pA), move(playerB_bet));
+        } else {
+            if (copy(winner_pB)) {
+                LibraAccount.deposit(copy(pB), move(playerA_bet));
+                LibraAccount.deposit(copy(pB), move(playerB_bet));
+            } else {
+            //draw, both exit
+                LibraAccount.deposit(copy(pA), move(playerA_bet));
+                LibraAccount.deposit(copy(pB), move(playerB_bet));
+            }
+        }
+        return;
+    }
+
+    // playerB timeout
+    public playerB_time_out() acquires Response {
+        let now: u64;
+        let expiry: u64;
+        let RESPONSE_EXPIRY: u64;
+        let sender: address;
+
+        let challenge: Self.Challenge;
+        let challenge_player: address;
+        let challenge_bet: LibraCoin.T;
+        let challenge_punches: bytearray;
+        let challenge_password: u64;
+        let challenge_timestamp: u64;
+
+        let response: Self.Response;
+        let response_player: address;
+        let response_bet: LibraCoin.T;
+        let response_punches: u64;
+        let response_password: u64;
+
+        now = Block.get_current_height();
+        sender = get_txn_sender();
+
+        response = move_from<Response>(copy(sender));
+        Response {
+            playerA: response_player,
+            challenge: challenge,
+            bet: response_bet,
+            punches: response_punches,
+            password: response_password,
+        } = move(response);
+
+        Challenge {
+            playerB: challenge_player,
+            bet: challenge_bet,
+            hmac_punches: challenge_punches,
+            timestamp: challenge_timestamp,
+            password: challenge_password,
+        } = move(challenge);
+
+        expiry = copy(challenge_timestamp) + 6;
+        // time is right
+        assert(copy(expiry) < copy(now), 98);
+
+        LibraAccount.deposit(copy(sender), move(response_bet));
+        LibraAccount.deposit(copy(sender), move(challenge_bet));
+
+        return;
+    }
+}
+
+//! account: alice, 1000000
+//! account: bob, 1000000
+
+//! new-transaction
+//! sender: alice
+//! args: {{bob}}
+import {{default}}.GamePunches;
+import 0x0.LibraAccount;
+import 0x0.LibraCoin;
+import 0x0.U64Util;
+
+main(playerB: address) {
+    let coin: LibraCoin.T;
+    let punches_bytes: bytearray;
+    let punches_playerb: u64;
+    let playerA_punches: u64;
+    let playerA_password: u64;
+    let sender: address;
+    let playerA_key_bytes: bytearray;
+    let account_exists: bool;
+
+    account_exists = LibraAccount.exists(copy(playerB));
+    if (!move(account_exists)) {
+        // playerB is not exist
+        return;
+    }
+
+    playerA_key_bytes = U64Util.u64_to_bytes(10000);
+    playerA_punches = 10;
+    playerA_password = 15;
+    sender = get_txn_sender();
+    // playerA to player challenge bet 10coin, punches 5, password 15
+    coin = LibraAccount.withdraw_from_sender(100);
+    punches_bytes = GamePunches.hash_punches(copy(playerA_key_bytes), copy(playerA_punches));
+    GamePunches.playerA_issue_chanllenge(copy(playerB), move(coin), copy(punches_bytes), copy(playerA_password));
+    return;
+}
+
+//! new-transaction
+// playerB accept chanllenge
+//! sender: bob
+//! args: {{alice}}
+import {{default}}.GamePunches;
+import 0x0.LibraAccount;
+import 0x0.LibraCoin;
+main(playerA: address) {
+    let coin: LibraCoin.T;
+    let punches_playerb: u64;
+    let playerB_punches: u64;
+    let playerB_password: u64;
+
+    coin = LibraAccount.withdraw_from_sender(100);
+    //playerB
+    punches_playerb = 10;
+    playerB_password = 20;
+    GamePunches.playerB_accept_chanllenge(copy(playerA), move(coin), copy(punches_playerb), copy(playerB_password));
+    return;
+}
+
+//! new-transaction
+// playerA expose chanllenge
+//! sender: alice
+//! args: {{bob}}
+import {{default}}.GamePunches;
+import 0x0.LibraAccount;
+import 0x0.LibraCoin;
+import 0x0.U64Util;
+
+main(playerB: address) {
+    let punches_playerb: u64;
+    let playerA_punches: u64;
+    let playerA_password: u64;
+    let playerA_key_bytes: bytearray;
+
+    playerA_key_bytes = U64Util.u64_to_bytes(10000);
+    playerA_punches = 10;
+    playerA_password = 15;
+    GamePunches.playerA_expose_challenge(copy(playerB), copy(playerA_key_bytes), copy(playerA_punches), copy(playerA_password));
+    return;
+}
+
+//! new-transaction
+//! sender: alice
+//! args: {{bob}}
+//playerA clearing
+import {{default}}.GamePunches;
+import 0x0.LibraAccount;
+import 0x0.LibraCoin;
+import 0x0.U64Util;
+
+main(playerB: address) {
+    let sender: address;
+    let balanceA: u64;
+    let balanceB: u64;
+    sender = get_txn_sender();
+    //player clearing
+    GamePunches.clearing(copy(sender), copy(playerB));
+    //check blance
+    balanceA = LibraAccount.balance(copy(sender));
+    balanceB = LibraAccount.balance(copy(playerB));
+    //playerB win
+    assert(copy(balanceA) < 1000000, 99);
+//    assert(copy(balanceB) > 1000000, copy(balanceB));
+    return;
+}
